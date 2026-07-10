@@ -6,8 +6,7 @@ import PackageDescription
 // Conforms to the MLXEngine contract (MLXToolKit) and returns the canonical text transcript.
 //
 // Swift-port naming: `-swift` on the package/repo; module/product stays clean `MLXNemotronSTT`.
-// Engine dep is a LOCAL PATH to the feat/stt-capability worktree while the stt capability
-// (contract 1.20.0) is unlanded — repoint to the tagged release on Phase-6 promotion.
+// Consumes the published MLXEngine (v0.29.0, stt capability) + NemotronASR core (v0.1.0).
 let package = Package(
     name: "mlx-nemotron-stt-swift",
     platforms: [
@@ -18,11 +17,10 @@ let package = Package(
         .executable(name: "nemotron-stt-gate", targets: ["nemotron-stt-gate"]),
     ],
     dependencies: [
-        // Local worktree on feat/stt-capability (contract 1.20.0, stt capability). Repoint to
-        // `.package(url: "https://github.com/xocialize/mlx-engine-swift", from: "0.28.0")` on promotion.
-        .package(path: "../../../MLXEngine/mlx-engine-swift-stt"),
-        // The Nemotron ASR core (this repo's sibling WIP package).
-        .package(path: "../nemotron-asr-mlx-swift"),
+        // MLXEngine contract + runtime (stt capability landed in contract 1.20.0 / engine v0.29.0).
+        .package(url: "https://github.com/xocialize/mlx-engine-swift", from: "0.29.0"),
+        // The Nemotron ASR core.
+        .package(url: "https://github.com/xocialize/nemotron-asr-mlx-swift.git", from: "0.1.0"),
         // HubClient — the native downloader for WeightSourcing auto-materialization.
         .package(url: "https://github.com/huggingface/swift-huggingface.git",
                  .upToNextMajor(from: "0.9.0")),
@@ -31,7 +29,7 @@ let package = Package(
         .target(
             name: "MLXNemotronSTT",
             dependencies: [
-                .product(name: "MLXToolKit", package: "mlx-engine-swift-stt"),
+                .product(name: "MLXToolKit", package: "mlx-engine-swift"),
                 .product(name: "NemotronASR", package: "nemotron-asr-mlx-swift"),
                 .product(name: "HuggingFace", package: "swift-huggingface"),
             ]
@@ -40,15 +38,15 @@ let package = Package(
             name: "nemotron-stt-gate",
             dependencies: [
                 "MLXNemotronSTT",
-                .product(name: "MLXServeCore", package: "mlx-engine-swift-stt"),
+                .product(name: "MLXServeCore", package: "mlx-engine-swift"),
             ]
         ),
         .testTarget(
             name: "MLXNemotronSTTTests",
             dependencies: [
                 "MLXNemotronSTT",
-                .product(name: "MLXServeCore", package: "mlx-engine-swift-stt"),
-                .product(name: "MLXServeConformance", package: "mlx-engine-swift-stt"),
+                .product(name: "MLXServeCore", package: "mlx-engine-swift"),
+                .product(name: "MLXServeConformance", package: "mlx-engine-swift"),
             ]
         ),
     ]

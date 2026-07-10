@@ -1,5 +1,5 @@
 {
-  "originHash" : "ddb16c21b5d488f3146bf41eeb967ca7d796dd716847fda67816c373523e65f7",
+  "originHash" : "c8b2d261bf388a3c52dd602362ae6bd161c22171a1b6af9e292a29c5838d4af5",
   "pins" : [
     {
       "identity" : "eventsource",
@@ -11,12 +11,39 @@
       }
     },
     {
+      "identity" : "mlx-audio-dsp",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/xocialize/mlx-audio-dsp.git",
+      "state" : {
+        "revision" : "73823a16924363e2be7fa5f10ed767d1f7ffd9ae",
+        "version" : "0.1.0"
+      }
+    },
+    {
+      "identity" : "mlx-engine-swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/xocialize/mlx-engine-swift",
+      "state" : {
+        "revision" : "6396bf0df4b628f7bc565301acb6d6e96a70e221",
+        "version" : "0.29.0"
+      }
+    },
+    {
       "identity" : "mlx-swift",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/ml-explore/mlx-swift",
       "state" : {
         "revision" : "0bb916c67f4b9e5c682cbe02a42c701c93ab5021",
         "version" : "0.31.6"
+      }
+    },
+    {
+      "identity" : "nemotron-asr-mlx-swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/xocialize/nemotron-asr-mlx-swift.git",
+      "state" : {
+        "revision" : "16dcce7263908c92a8397d0f40aaa9feb32bfdbb",
+        "version" : "0.1.0"
       }
     },
     {
