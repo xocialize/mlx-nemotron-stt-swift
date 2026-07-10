@@ -1,5 +1,12 @@
 # mlx-nemotron-stt-swift
 
+![platform](https://img.shields.io/badge/platform-macOS%2026%2B%20%C2%B7%20Apple%20Silicon-black)
+![swift](https://img.shields.io/badge/Swift-6.2-orange)
+![engine](https://img.shields.io/badge/MLXEngine-%E2%89%A5%20v0.29.0-purple)
+![capability](https://img.shields.io/badge/capability-stt-lightgrey)
+![port code](https://img.shields.io/badge/port%20code-MIT-blue)
+![weights](https://img.shields.io/badge/weights-OpenMDW--1.1-green)
+
 The **MLXEngine `stt` (speech-to-text) package**: NVIDIA **Nemotron 3.5 ASR streaming** wrapped as
 a conformant [`ModelPackage`](https://github.com/xocialize/mlx-engine-swift), returning the
 canonical text transcript. Multilingual (40 language-locales), native punctuation and
@@ -10,6 +17,24 @@ capitalization, on-device on Apple Silicon.
 - **Weights:** [`mlx-community/nemotron-3.5-asr-streaming-0.6b`](https://huggingface.co/mlx-community/nemotron-3.5-asr-streaming-0.6b) (bf16, ~1.2 GB) and `-8bit`, auto-materialized on first run.
 - **Capability:** `stt` (contract 1.20.0, engine ≥ v0.29.0). Canonical output: text.
 - **License:** weights **OpenMDW-1.1** (permissive); port code **MIT**.
+
+## Install
+
+Add the package to your `Package.swift`:
+
+```swift
+.package(url: "https://github.com/xocialize/mlx-nemotron-stt-swift.git", from: "0.1.0"),
+```
+
+and the product to your target:
+
+```swift
+.product(name: "MLXNemotronSTT", package: "mlx-nemotron-stt-swift"),
+```
+
+Requires [`mlx-engine-swift`](https://github.com/xocialize/mlx-engine-swift) **≥ v0.29.0** (the
+`stt` capability). The engine + core (`NemotronASR`) resolve transitively. In an Xcode app,
+add the package and link the **MLXNemotronSTT** product to your app target.
 
 ## Usage (through MLXEngine)
 
