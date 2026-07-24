@@ -77,18 +77,17 @@ public final class NemotronSTTPackage: ModelPackage {
 
     public func load() async throws {
         guard model == nil else { return }
-        // Auto-materialize missing sources into the engine store (dir-less configs only; explicit
-        // directories never touch the network), forwarding progress so the engine surfaces
-        // `.downloading`.
+
+        // Materialization is ENGINE-EXECUTED since contract 1.24 (engine ≥ 0.32.0): the engine
+        // downloads the declared missing sources into the store BEFORE load(). This guard is the
+        // offline backstop only — reaching it means no engine materialization ran (no store set,
+        // or a non-engine caller) and the sources genuinely aren't on disk.
         let storeRoot = configuration.modelsRootDirectory
         let missing = configuration.missingWeightSources(storeRoot: storeRoot)
-        if !missing.isEmpty {
-            guard let storeRoot else {
-                throw NemotronSTTError.missingWeights(
-                    "no models root set and sources missing: "
-                        + missing.map(\.role).joined(separator: ", "))
-            }
-            try await WeightMaterializer.materialize(missing, into: storeRoot)
+        guard missing.isEmpty else {
+            throw NemotronSTTError.missingWeights(
+                "sources not materialized: " + missing.map(\.role).joined(separator: ", ")
+                    + (storeRoot.map { " (store: \($0.path))" } ?? " (no models root set)"))
         }
         try Task.checkCancellation()
         guard let dir = configuration.resolved(storeRoot: storeRoot).modelDirectory else {

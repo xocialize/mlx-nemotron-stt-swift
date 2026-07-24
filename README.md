@@ -2,7 +2,7 @@
 
 ![platform](https://img.shields.io/badge/platform-macOS%2026%2B%20%C2%B7%20Apple%20Silicon-black)
 ![swift](https://img.shields.io/badge/Swift-6.2-orange)
-![engine](https://img.shields.io/badge/MLXEngine-%E2%89%A5%20v0.29.0-purple)
+![engine](https://img.shields.io/badge/MLXEngine-%E2%89%A5%20v0.32.0-purple)
 ![capability](https://img.shields.io/badge/capability-stt-lightgrey)
 ![port code](https://img.shields.io/badge/port%20code-MIT-blue)
 ![weights](https://img.shields.io/badge/weights-OpenMDW--1.1-green)
@@ -14,8 +14,8 @@ capitalization, on-device on Apple Silicon.
 
 - **Model:** [`nvidia/nemotron-3.5-asr-streaming-0.6b`](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b) — 600M cache-aware FastConformer-RNNT with language-ID prompt conditioning.
 - **Core:** [`xocialize/nemotron-asr-mlx-swift`](https://github.com/xocialize/nemotron-asr-mlx-swift) (`NemotronASR`) — the MLX-Swift port, parity-locked bit-for-bit against the Python `Blaizzy/mlx-audio` reference.
-- **Weights:** [`mlx-community/nemotron-3.5-asr-streaming-0.6b`](https://huggingface.co/mlx-community/nemotron-3.5-asr-streaming-0.6b) (bf16, ~1.2 GB) and `-8bit`, auto-materialized on first run.
-- **Capability:** `stt` (contract 1.20.0, engine ≥ v0.29.0). Canonical output: text.
+- **Weights:** [`mlx-community/nemotron-3.5-asr-streaming-0.6b`](https://huggingface.co/mlx-community/nemotron-3.5-asr-streaming-0.6b) (bf16, ~1.2 GB) and `-8bit`, downloaded by the engine on first run (19.4 s cold, measured).
+- **Capability:** `stt` (contract 1.20.0, engine ≥ v0.32.0). Canonical output: text.
 - **License:** weights **OpenMDW-1.1** (permissive); port code **MIT**.
 
 ## Install
@@ -23,7 +23,7 @@ capitalization, on-device on Apple Silicon.
 Add the package to your `Package.swift`:
 
 ```swift
-.package(url: "https://github.com/xocialize/mlx-nemotron-stt-swift.git", from: "0.1.0"),
+.package(url: "https://github.com/xocialize/mlx-nemotron-stt-swift.git", from: "0.3.0"),
 ```
 
 and the product to your target:
@@ -32,8 +32,9 @@ and the product to your target:
 .product(name: "MLXNemotronSTT", package: "mlx-nemotron-stt-swift"),
 ```
 
-Requires [`mlx-engine-swift`](https://github.com/xocialize/mlx-engine-swift) **≥ v0.29.0** (the
-`stt` capability). The engine + core (`NemotronASR`) resolve transitively. In an Xcode app,
+Requires [`mlx-engine-swift`](https://github.com/xocialize/mlx-engine-swift) **≥ v0.32.0** —
+`stt` landed in v0.29.0, but this package carries no downloader of its own and relies on the
+engine-executed materialization added in contract 1.24.0 / v0.32.0. The engine + core (`NemotronASR`) resolve transitively. In an Xcode app,
 add the package and link the **MLXNemotronSTT** product to your app target.
 
 ## Usage (through MLXEngine)
@@ -110,7 +111,8 @@ Use `AudioDecode.monoSamples(from:)` to turn a file into the samples a session w
   enqueue; the driver task is `@InferenceActor`, so live decoding serializes with `run()` and
   every other package exactly like normal engine work.
 - **Born engine-clean.** Split memory footprint (bf16 1.24 GB resident + ~0.82 GB activation;
-  int8 0.64 GB), `WeightSourcing` auto-materialization (MAT gate green), and cooperative
+  int8 0.64 GB), `WeightSourcing` declared for ENGINE-EXECUTED materialization (the package
+  has no materializer of its own — `load()` only guards; MAT gate green), and cooperative
   cancellation checkpointed per decoded chunk (CAN gate green). Conforms to the C0–C13 gate.
 
 ## Tests & gate
@@ -119,12 +121,20 @@ Use `AudioDecode.monoSamples(from:)` to turn a file into the samples a session w
 swift test                                   # C0–C13 + MAT-1..5 + CAN-1..3 + live guards (offline)
 swift run nemotron-stt-gate <path.wav>       # register → prepare(.stt) → run via MLXServeEngine
 swift run nemotron-stt-gate <path.wav> --live --cancel-after 2
+swift run nemotron-stt-gate <path.wav> --metrics [--mat]   # [RUN]/[LIVE]/[MAT] evidence
 ```
 
 `--live` pushes the same wav through `startLiveTranscription` in 100 ms buffers and requires the
 final transcript to equal what `run()` produced (LIV-1), after interim partials (LIV-2), with a
 sane processed duration (LIV-3); `--cancel-after` checks that cancelling mid-stream ends the
 stream and leaves the package runnable (LIV-4).
+
+`--metrics` measures the latency ladder the way a microphone feeds it (100 ms buffers,
+unpaced, so wall time is compute). Every rung runs faster than realtime on an M5 Max —
+80 ms at rtf 0.34, 1.12 s at rtf 0.04 — with peak flat at ~2.3 GB. `--mat` adds a cold
+first-run download against a throwaway engine and an empty store: **1.28 GB in 19.4 s,
+72 progress events**. Since this package has no materializer, that download succeeding is
+the proof the engine executed it.
 
 ## Related
 
