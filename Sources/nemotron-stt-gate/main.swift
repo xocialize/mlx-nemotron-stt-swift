@@ -15,6 +15,7 @@
 // cancels the session after N partials and checks the package still runs afterwards (LIV-4).
 
 import Foundation
+import MLXEngineTestKit
 import MLXNemotronSTT
 import MLXServeCore
 import MLXToolKit
@@ -39,6 +40,8 @@ struct Main {
         let modelDir = popOption("--model-dir")
         let live = popFlag("--live")
         let cancelAfter = popOption("--cancel-after").flatMap(Int.init)
+        let metrics = popFlag("--metrics")
+        let mat = popFlag("--mat")
         guard let wavPath = args.first else {
             FileHandle.standardError.write(Data("usage: nemotron-stt-gate <wav> [--language L] [--model-dir DIR]\n".utf8))
             exit(2)
@@ -77,10 +80,108 @@ struct Main {
                     oneShot: stt, cancelAfter: cancelAfter)
                 guard ok else { exit(1) }
             }
+            if metrics {
+                try await runMetrics(
+                    engine: engine, wav: wav, language: language,
+                    audioSeconds: Double(stt.segments.last.map { $0.start + $0.duration } ?? 0),
+                    runSeconds: runTime, config: config, includeMaterialization: mat)
+            }
         } catch {
             FileHandle.standardError.write(Data("ERROR: \(error)\n".utf8))
             exit(1)
         }
+    }
+
+    /// Registry evidence: one-shot throughput, the live surface at every rung of the latency
+    /// ladder, and (opt-in) first-run materialization. Grep `[RUN]` / `[LIVE]` / `[MAT]`.
+    @MainActor
+    static func runMetrics(
+        engine: MLXServeEngine, wav: Data, language: String?,
+        audioSeconds: Double, runSeconds: Double,
+        config: NemotronSTTConfiguration, includeMaterialization: Bool
+    ) async throws {
+        print("\n--- metrics ---")
+        let samples = try AudioDecode.monoSamples(from: Audio(format: .wav, data: wav))
+        let seconds = audioSeconds > 0 ? audioSeconds : Double(samples.count) / 16_000.0
+
+        // One-shot: the canonical engine.run path, timed above. Re-run warm so the number is
+        // steady-state rather than first-call kernel compilation.
+        let warmStart = Date()
+        _ = try await engine.run(
+            STTRequest(audio: Audio(format: .wav, data: wav), language: language))
+        let warm = Date().timeIntervalSince(warmStart)
+        let phys = HostMemory.physFootprint() ?? 0
+        print(
+            String(
+                format: "[RUN] pkg=nemotron-stt audio=%.1fs cold=%.2fs warm=%.2fs rtfx=%.1f phys=%.2fGB",
+                seconds, runSeconds, warm, seconds / warm, Double(phys) / 1_073_741_824))
+
+        // The latency ladder, fed the way a microphone feeds it (100 ms buffers) but unpaced,
+        // so wall time measures compute rather than the length of the clip. rtf < 1 is the bar
+        // for keeping up with a live speaker.
+        guard let package = try await engine.prepare(.stt) as? NemotronSTTPackage else { return }
+        for right in [0, 1, 3, 6, 13] {
+            let session = try await package.startLiveTranscription(
+                .init(language: language, attContextSize: [56, right]))
+            let sampler = MemorySampler()
+            sampler.start(initial: HostMemory.physFootprint() ?? 0)
+            let start = Date()
+
+            let collector = Task { () -> (first: Double?, count: Int, gaps: [Double]) in
+                var first: Double?
+                var count = 0
+                var gaps: [Double] = []
+                var previous = start
+                for try await update in session.updates where !update.isFinal {
+                    let now = Date()
+                    if first == nil { first = now.timeIntervalSince(start) }
+                    gaps.append(now.timeIntervalSince(previous))
+                    previous = now
+                    count += 1
+                }
+                return (first, count, gaps)
+            }
+
+            var cursor = 0
+            while cursor < samples.count {
+                let end = min(cursor + 1_600, samples.count)
+                session.push(Array(samples[cursor..<end]))
+                cursor = end
+            }
+            session.finish()
+            let observed = try await collector.value
+            let wall = Date().timeIntervalSince(start)
+            sampler.stop()
+
+            let meanGap = observed.gaps.isEmpty
+                ? 0 : observed.gaps.reduce(0, +) / Double(observed.gaps.count)
+            print(
+                String(
+                    format:
+                        "[LIVE] acs=[56,%d] chunk=%dms ttfp=%.0fms partials=%d cadence=%.0fms "
+                        + "wall=%.2fs rtf=%.2f peak=%.2fGB",
+                    right, (right + 1) * 80, (observed.first ?? 0) * 1000, observed.count,
+                    meanGap * 1000, wall, wall / seconds,
+                    Double(sampler.peak) / 1_073_741_824))
+        }
+
+        guard includeMaterialization else { return }
+        // First-run download, measured the way a fresh machine experiences it: a throwaway
+        // engine against an empty store.
+        let temp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("nemotron-mat-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temp) }
+
+        var matConfig = NemotronSTTConfiguration(attContextSize: config.attContextSize)
+        matConfig.modelsRootDirectory = temp
+        let matEngine = MLXServeEngine()
+        await matEngine.useModelStore(ModelStore(root: temp))
+        _ = try await matEngine.register(NemotronSTTPackage.registration, configuration: matConfig)
+        let run = try await MaterializationBench.run(
+            engine: matEngine, capability: .stt, configuration: matConfig,
+            sourceRepo: "mlx-community/nemotron-3.5-asr-streaming-0.6b", storeRoot: temp)
+        print(run.logLine)
     }
 
     /// LIV-1..4 — the live surface against the one-shot result it must agree with.

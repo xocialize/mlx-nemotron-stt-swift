@@ -1,5 +1,5 @@
 {
-  "originHash" : "412ca902bca997994d69c421d68c7e6181031b992f86222e1958b70e17c94e90",
+  "originHash" : "e1dda2836b072a9378d86a547bc3e62866eaf8e4fbb35751ceb095764a78d838",
   "pins" : [
     {
       "identity" : "eventsource",
@@ -35,6 +35,15 @@
       "state" : {
         "revision" : "0bb916c67f4b9e5c682cbe02a42c701c93ab5021",
         "version" : "0.31.6"
+      }
+    },
+    {
+      "identity" : "nemotron-asr-mlx-swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/xocialize/nemotron-asr-mlx-swift.git",
+      "state" : {
+        "revision" : "a93d264ff282fb986634fc77e4ddac62e40e68e0",
+        "version" : "0.2.0"
       }
     },
     {
