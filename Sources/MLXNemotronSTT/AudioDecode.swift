@@ -6,11 +6,16 @@ import AVFoundation
 import Foundation
 import MLXToolKit
 
-enum AudioDecode {
-    enum DecodeError: Error, LocalizedError {
+/// Decoding from the canonical `Audio` artifact to the waveform the model wants.
+///
+/// Public because live transcription needs it: `run(_:)` decodes for you, but a consumer
+/// pushing a file (or any non-microphone source) into a `NemotronLiveTranscription` has to
+/// produce 16 kHz mono Float32 itself.
+public enum AudioDecode {
+    public enum DecodeError: Error, LocalizedError {
         case unreadable
         case emptyAudio
-        var errorDescription: String? {
+        public var errorDescription: String? {
             switch self {
             case .unreadable: return "Could not decode the STT request audio."
             case .emptyAudio: return "The STT request audio was empty."
@@ -19,7 +24,8 @@ enum AudioDecode {
     }
 
     /// Decode WAV bytes → [Float] mono at `targetRate` (default 16 kHz).
-    static func monoSamples(from audio: Audio, targetRate: Double = 16000) throws -> [Float] {
+    public static func monoSamples(from audio: Audio, targetRate: Double = 16000) throws -> [Float]
+    {
         // Write to a temp file so AVAudioFile can parse the container (it needs a URL).
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString).appendingPathExtension("wav")

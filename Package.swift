@@ -20,7 +20,10 @@ let package = Package(
         // MLXEngine contract + runtime (stt capability landed in contract 1.20.0 / engine v0.29.0).
         .package(url: "https://github.com/xocialize/mlx-engine-swift", from: "0.29.0"),
         // The Nemotron ASR core.
-        .package(url: "https://github.com/xocialize/nemotron-asr-mlx-swift.git", from: "0.1.0"),
+        // DEV: local path until nemotron-asr-mlx-swift v0.2.0 (live streaming session) is
+        // pushed; restore
+        //   .package(url: "https://github.com/xocialize/nemotron-asr-mlx-swift.git", from: "0.2.0"),
+        .package(path: "../Nemotron/nemotron-asr-mlx-swift"),
         // HubClient — the native downloader for WeightSourcing auto-materialization.
         .package(url: "https://github.com/huggingface/swift-huggingface.git",
                  .upToNextMajor(from: "0.9.0")),

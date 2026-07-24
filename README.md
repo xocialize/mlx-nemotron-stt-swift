@@ -67,13 +67,48 @@ The look-ahead context trades accuracy for latency, via `NemotronSTTConfiguratio
 | `[56, 6]` / `[56, 3]` | 0.56 s / 0.32 s | interactive |
 | `[56, 0]` | 80 ms | lowest latency |
 
+## Live transcription (microphone)
+
+`engine.run` needs a complete utterance. For audio that is still arriving, open a live session
+on the prepared package — the same model residency, reached by downcasting the instance
+`prepare` hands back:
+
+```swift
+guard let package = try await engine.prepare(.stt) as? NemotronSTTPackage else { return }
+let live = try await package.startLiveTranscription(.init(attContextSize: [56, 3]))
+
+// Read cumulative transcripts; the last one has isFinal == true.
+Task { @MainActor in
+    for try await update in live.updates {
+        transcript = update.result.text
+    }
+}
+
+// Feed it. push() is safe to call from an audio callback: it copies and returns,
+// and never touches MLX — all inference runs on the engine's inference actor.
+micTap { buffer in live.push(buffer) }   // 16 kHz mono Float32, any buffer size
+
+live.finish()   // flush the tail and emit the final transcript (or cancel() to abandon)
+```
+
+`updates` ends with `CancellationError` if you cancel, or `NemotronSTTError.sessionInvalidated`
+if the engine evicts the model underneath the session. One session at a time — a second
+`startLiveTranscription` while one is open throws `NemotronSTTError.sessionActive`.
+
+Use `AudioDecode.monoSamples(from:)` to turn a file into the samples a session wants.
+
 ## Design notes
 
-- **One-shot, utterance-shaped.** Capture a complete utterance → one `run()` → transcript. The
-  model's cache-aware chunked streaming is package-internal memory discipline (bounded STFT +
-  per-layer attention/conv ring-buffer caches), not a request surface. At ~27× realtime a few
-  seconds of speech transcribes in well under a second, so turn-based feels instant. Live partial
-  hypotheses are the engine's deferred token-streaming contract, not this surface.
+- **Two shapes, one model.** `run()` is one-shot and utterance-shaped — a complete utterance in,
+  a transcript out — and that is the engine's canonical `stt` contract, unchanged. Live partial
+  hypotheses are a *package-specific* surface (`startLiveTranscription`) rather than a request
+  type, because the engine's token-streaming contract streams output for a request whose input
+  is known up front, which a microphone is not. Both share the core's cache-aware streaming
+  session, and the core's `stream-gate` holds ragged live pushes to byte-identical output
+  against the whole-buffer pass.
+- **MLX never runs on the audio thread.** `push`/`finish`/`cancel` are `nonisolated` and only
+  enqueue; the driver task is `@InferenceActor`, so live decoding serializes with `run()` and
+  every other package exactly like normal engine work.
 - **Born engine-clean.** Split memory footprint (bf16 1.24 GB resident + ~0.82 GB activation;
   int8 0.64 GB), `WeightSourcing` auto-materialization (MAT gate green), and cooperative
   cancellation checkpointed per decoded chunk (CAN gate green). Conforms to the C0–C13 gate.
@@ -81,9 +116,15 @@ The look-ahead context trades accuracy for latency, via `NemotronSTTConfiguratio
 ## Tests & gate
 
 ```bash
-swift test                                   # C0–C13 + MAT-1..5 + CAN-1..3 (offline)
-swift run nemotron-stt-gate <path.wav>       # live: register → prepare(.stt) → run via MLXServeEngine
+swift test                                   # C0–C13 + MAT-1..5 + CAN-1..3 + live guards (offline)
+swift run nemotron-stt-gate <path.wav>       # register → prepare(.stt) → run via MLXServeEngine
+swift run nemotron-stt-gate <path.wav> --live --cancel-after 2
 ```
+
+`--live` pushes the same wav through `startLiveTranscription` in 100 ms buffers and requires the
+final transcript to equal what `run()` produced (LIV-1), after interim partials (LIV-2), with a
+sane processed duration (LIV-3); `--cancel-after` checks that cancelling mid-stream ends the
+stream and leaves the package runnable (LIV-4).
 
 ## Related
 

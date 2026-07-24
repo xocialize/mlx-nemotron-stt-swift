@@ -9,6 +9,10 @@ public enum NemotronSTTError: Error, Equatable {
     case missingWeights(String)
     /// The resolved model directory could not be determined.
     case unresolvedDirectory
+    /// A live transcription session is already running; finish or cancel it first.
+    case sessionActive
+    /// The engine unloaded the model while a live session was open.
+    case sessionInvalidated
 }
 
 /// The MLXEngine `stt` (speech-to-text) package: NVIDIA Nemotron 3.5 ASR streaming exposing the
@@ -63,6 +67,9 @@ public final class NemotronSTTPackage: ModelPackage {
 
     private let configuration: Configuration
     private var model: NemotronASRModel?
+    /// The open live session, if any. Weak: the consumer owns its lifetime, and a session it
+    /// has dropped must not block a new one.
+    private weak var liveSession: NemotronLiveTranscription?
 
     public nonisolated init(configuration: Configuration) {
         self.configuration = configuration
@@ -94,6 +101,10 @@ public final class NemotronSTTPackage: ModelPackage {
     }
 
     public func unload() async {
+        // An open live session holds the model too; end it before dropping ours, or the
+        // weights stay alive past eviction.
+        liveSession?.invalidate()
+        liveSession = nil
         model = nil
         MLX.GPU.clearCache()
     }
@@ -158,5 +169,33 @@ extension NemotronSTTPackage {
     /// The author one-liner the engine registers.
     public nonisolated static var registration: PackageRegistration {
         .of(NemotronSTTPackage.self)
+    }
+
+    /// Open a live transcription session on the prepared model — the package-specific surface
+    /// for audio that is still arriving. The engine's `stt` contract stays one-shot; file and
+    /// utterance transcription still go through `engine.run(STTRequest)`.
+    ///
+    /// Reach it by downcasting the instance the engine hands back:
+    /// ```swift
+    /// guard let package = try await engine.prepare(.stt) as? NemotronSTTPackage else { ... }
+    /// let live = try await package.startLiveTranscription(.init(attContextSize: [56, 3]))
+    /// ```
+    ///
+    /// - Throws: `PackageError.notLoaded` before the engine has prepared the package, and
+    ///   `NemotronSTTError.sessionActive` while another session is still open.
+    public func startLiveTranscription(
+        _ options: NemotronLiveTranscription.Options = .init()
+    ) throws -> NemotronLiveTranscription {
+        guard let model else { throw PackageError.notLoaded }
+        if let open = liveSession, !open.isDone { throw NemotronSTTError.sessionActive }
+
+        // An unset latency knob inherits the package's configured one.
+        var options = options
+        options.attContextSize = options.attContextSize ?? configuration.attContextSize
+
+        let session = NemotronLiveTranscription(model: model, options: options)
+        liveSession = session
+        session.start()
+        return session
     }
 }
