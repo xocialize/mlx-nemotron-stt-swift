@@ -8,15 +8,16 @@
 // Usage: swift run nemotron-stt-gate <path-to.wav> [--language en-US] [--model-dir DIR]
 //                                                  [--live] [--cancel-after N]
 //
-// `--live` additionally drives the live transcription surface: the same wav is pushed through
-// startLiveTranscription in small real-time-shaped buffers, and the final transcript must
-// equal what engine.run(STTRequest) produced (LIV-1), after at least one interim partial
-// (LIV-2), with monotonic timestamps and a sane processed duration (LIV-3). `--cancel-after N`
-// cancels the session after N partials and checks the package still runs afterwards (LIV-4).
+// `--live` runs the contract's **LIV-1..6 gate** (MLXEngine 1.39.0, companion N2) against the
+// canonical plane: `MLXServeEngine.transcribeLive` fed the same wav in real-time-shaped buffers.
+// LIV-5 (the final transcript equals what `engine.run(STTRequest)` produced) is the one that
+// promotes the plane, and the one that catches a live path quietly diverging from the batch one.
+// `--cancel-after N` additionally checks the package still serves a normal request afterwards.
 
 import Foundation
 import MLXEngineTestKit
 import MLXNemotronSTT
+import MLXServeConformance
 import MLXServeCore
 import MLXToolKit
 import NemotronASR
@@ -121,8 +122,12 @@ struct Main {
         // for keeping up with a live speaker.
         guard let package = try await engine.prepare(.stt) as? NemotronSTTPackage else { return }
         for right in [0, 1, 3, 6, 13] {
+            // Deliberately the package-specific surface: the latency ladder is `attContextSize`,
+            // which is package CONFIGURATION and has no canonical request field. Naming the type
+            // is required since 1.39.0 — `.init(language:)` also matches `STTSessionRequest`.
             let session = try await package.startLiveTranscription(
-                .init(language: language, attContextSize: [56, right]))
+                NemotronLiveTranscription.Options(language: language,
+                                                  attContextSize: [56, right]))
             let sampler = MemorySampler()
             sampler.start(initial: HostMemory.physFootprint() ?? 0)
             let start = Date()
@@ -184,114 +189,123 @@ struct Main {
         print(run.logLine)
     }
 
-    /// LIV-1..4 — the live surface against the one-shot result it must agree with.
+    /// The LIV-1..6 gate (contract 1.39.0) over the canonical live plane.
+    ///
+    /// Package-level checks (LIV-1's session half, LIV-3, LIV-6) run against sessions the
+    /// package hands out directly, because that is what they are about. LIV-2/4/5 run over the
+    /// chunks a real `engine.transcribeLive` session delivered.
     static func runLiveGate(
         engine: MLXServeEngine, wav: Data, language: String?,
         oneShot: STTResponse, cancelAfter: Int?
     ) async throws -> Bool {
-        print("\n--- live ---")
+        print("\n--- live (LIV-1..6) ---")
         guard let package = try await engine.prepare(.stt) as? NemotronSTTPackage else {
             print("  FAIL  prepared package is not a NemotronSTTPackage")
             return false
         }
         let samples = try AudioDecode.monoSamples(from: Audio(format: .wav, data: wav))
         let audioSeconds = Double(samples.count) / 16_000.0
-        // 100 ms buffers — the shape a microphone tap delivers.
-        let bufferSize = 1_600
-
+        let bufferSize = 1_600      // 100 ms — the shape a microphone tap delivers
         var ok = true
-        let session = try await package.startLiveTranscription(.init(language: language))
 
-        // Consume updates concurrently: a real consumer reads while it feeds.
-        let collector = Task { () -> (partials: [String], final: String?, seconds: Double, error: Error?) in
-            var partials: [String] = []
-            var final: String?
-            var seconds = 0.0
-            do {
-                for try await update in session.updates {
-                    seconds = update.processedSeconds
-                    if update.isFinal { final = update.result.text } else {
-                        partials.append(update.result.text)
-                    }
-                }
-            } catch {
-                return (partials, final, seconds, error)
+        func report(_ r: StreamingConformance.Report) {
+            for check in r.checks {
+                print("  \(check.passed ? "PASS" : "FAIL")  \(check.name) — \(check.note)")
             }
-            return (partials, final, seconds, nil)
+            ok = ok && r.passed
         }
 
+        // LIV-1 — advertisement ⇔ conformance, then session ⇔ declaration.
+        report(LiveTranscriptionConformance.checkAdvertisement(NemotronSTTPackage.self))
+        do {
+            let probe = try await package.startLiveTranscription(STTSessionRequest())
+            let drained = Task { for try await _ in probe.updates {} }
+            report(LiveTranscriptionConformance.checkSessionMatchesDeclaration(
+                NemotronSTTPackage.self, session: probe))
+            // LIV-3 — push must not block on the inference actor (the audio-thread rule).
+            report(await LiveTranscriptionConformance.checkPushIsNonBlocking(session: probe))
+            probe.cancel()
+            // `cancel()` returns immediately; the session is not torn down until `updates` ends,
+            // and this package admits one session at a time. Draining is what a correct caller
+            // does before opening the next one.
+            _ = try? await drained.value
+        }
+
+        // LIV-2/4/5 — a real session through the engine seam.
+        let handle = try await engine.transcribeLive(STTSessionRequest(language: language))
+        let collector = Task { () -> ([STTStreamChunk], (any Error)?) in
+            var chunks: [STTStreamChunk] = []
+            do {
+                for try await chunk in handle.updates { chunks.append(chunk) }
+                return (chunks, nil)
+            } catch {
+                return (chunks, error)
+            }
+        }
+        // Feed faster than real time (a file harness, not a microphone) and BACK OFF on
+        // `.overrun` instead of dropping. That is the whole point of an explicit outcome: a
+        // file-fed caller can wait, a microphone cannot, and only the caller knows which it is.
+        // Dropping here instead would cost audio and show up as an LIV-5 failure — which is
+        // exactly what it did before this loop backed off.
         var pushed = 0
+        var backoffs = 0
+        var dropped = 0
         while pushed < samples.count {
             let end = min(pushed + bufferSize, samples.count)
-            session.push(Array(samples[pushed..<end]))
-            pushed = end
-            // Let the driver keep up rather than queueing the whole file at once.
-            try await Task.sleep(nanoseconds: 2_000_000)
+            switch handle.push(Array(samples[pushed..<end]),
+                               sampleRate: handle.expectedSampleRate) {
+            case .accepted:
+                pushed = end
+                try await Task.sleep(nanoseconds: 2_000_000)
+            case .overrun:
+                backoffs += 1
+                try await Task.sleep(nanoseconds: 20_000_000)   // let the model catch up, retry
+            case .ended:
+                dropped += samples.count - pushed
+                pushed = samples.count
+            default:
+                dropped += end - pushed
+                pushed = end
+            }
         }
-        session.finish()
-        let collected = await collector.value
+        handle.finish()
+        let (chunks, streamError) = await collector.value
 
-        if let error = collected.error {
-            print("  FAIL  updates ended with \(error)")
+        if let streamError {
+            print("  FAIL  updates ended with \(streamError)")
             return false
         }
-        // LIV-1: the live transcript must equal the one-shot transcript.
-        let same = collected.final == oneShot.text
-        print("  \(same ? "PASS" : "FAIL")  LIV-1 live transcript == engine.run transcript")
-        if !same {
-            print("    one-shot: \(oneShot.text)")
-            print("    live    : \(collected.final ?? "<none>")")
-        }
-        ok = ok && same
+        print("  \(dropped == 0 ? "PASS" : "FAIL")  back-pressure — \(backoffs) back-off(s) at "
+            + "maxBufferedSeconds=\(handle.maxBufferedSeconds), \(dropped) sample(s) dropped")
+        ok = ok && dropped == 0
 
-        // LIV-2: partial hypotheses arrived before the final one.
-        let sawPartials = !collected.partials.isEmpty
-        print("  \(sawPartials ? "PASS" : "FAIL")  LIV-2 \(collected.partials.count) interim partials")
-        ok = ok && sawPartials
+        report(LiveTranscriptionConformance.checkSequence(chunks))
+        report(LiveTranscriptionConformance.checkDiscipline(chunks,
+                                                            declared: handle.discipline))
+        report(LiveTranscriptionConformance.checkFinalParity(
+            chunks: chunks, discipline: handle.discipline, batchTranscript: oneShot.text))
 
-        // LIV-3: the session accounted for roughly the audio it was given.
-        let sane = abs(collected.seconds - audioSeconds) < 1.5
-        print(
-            "  \(sane ? "PASS" : "FAIL")  LIV-3 processed \(String(format: "%.1f", collected.seconds))s "
-                + "of \(String(format: "%.1f", audioSeconds))s audio")
+        let processed = chunks.last?.processedSeconds ?? 0
+        let sane = abs(processed - audioSeconds) < 1.5
+        print("  \(sane ? "PASS" : "FAIL")  processed \(String(format: "%.1f", processed))s of "
+            + "\(String(format: "%.1f", audioSeconds))s audio over \(chunks.count) chunk(s)")
         ok = ok && sane
 
-        // LIV-4: cancelling mid-stream ends the stream and leaves the package usable.
-        if let cancelAfter {
-            let cancelled = try await package.startLiveTranscription(.init(language: language))
-            let watcher = Task { () -> Error? in
-                do {
-                    var seen = 0
-                    for try await update in cancelled.updates {
-                        if !update.isFinal {
-                            seen += 1
-                            if seen >= cancelAfter { cancelled.cancel() }
-                        }
-                    }
-                    return nil
-                } catch {
-                    return error
-                }
-            }
-            var sent = 0
-            while sent < samples.count {
-                let end = min(sent + bufferSize, samples.count)
-                cancelled.push(Array(samples[sent..<end]))
-                sent = end
-                try await Task.sleep(nanoseconds: 2_000_000)
-            }
-            let cancelError = await watcher.value
-            let isCancellation = cancelError is CancellationError
-            print("  \(isCancellation ? "PASS" : "FAIL")  LIV-4a cancel ends updates with CancellationError")
-            ok = ok && isCancellation
+        // LIV-6 — cancel semantics, plus the package must still serve a normal request after.
+        // ~5 s of audio, comfortably inside `maxBufferedSeconds`, and enough for a few chunks
+        // at every rung of the latency ladder. `cancelAfter` is clamped to what that can
+        // actually produce — a check that waits for a chunk the feed cannot deliver hangs.
+        let feed = stride(from: 0, to: min(samples.count, bufferSize * 50), by: bufferSize)
+            .map { Array(samples[$0..<min($0 + bufferSize, samples.count)]) }
+        let cancelProbe = try await package.startLiveTranscription(STTSessionRequest())
+        report(await LiveTranscriptionConformance.checkCancelSemantics(
+            session: cancelProbe, feed: feed, cancelAfter: min(cancelAfter ?? 0, 2)))
 
-            // The package must still serve a normal request afterwards.
-            let after = try await engine.run(
-                STTRequest(audio: Audio(format: .wav, data: wav), language: language))
-            let recovered = (after as? STTResponse)?.text == oneShot.text
-            print("  \(recovered ? "PASS" : "FAIL")  LIV-4b package still runs after a cancelled session")
-            ok = ok && recovered
-        }
+        let after = try await engine.run(
+            STTRequest(audio: Audio(format: .wav, data: wav), language: language))
+        let recovered = (after as? STTResponse)?.text == oneShot.text
+        print("  \(recovered ? "PASS" : "FAIL")  package still runs after a cancelled session")
+        ok = ok && recovered
 
         return ok
     }

@@ -1,6 +1,15 @@
 {
-  "originHash" : "7103683c0f112c05780b7fb649223b6d1eeb770f99d9a16d760650a7de5b94b4",
+  "originHash" : "5b24625fdf70cc2f47b3ba12c987b5dde8d9285ff5d56798d522304af1f96d2d",
   "pins" : [
+    {
+      "identity" : "designscaffold",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/xocialize/DesignScaffold",
+      "state" : {
+        "revision" : "ef7826f445243ab13d1eed19f51dc38ec0b532ee",
+        "version" : "0.23.0"
+      }
+    },
     {
       "identity" : "mlx-audio-dsp",
       "kind" : "remoteSourceControl",
@@ -15,8 +24,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/xocialize/mlx-engine-swift",
       "state" : {
-        "revision" : "4c58c45a9a8f2ac129770e31e15c44a4125a226b",
-        "version" : "0.35.0"
+        "revision" : "9ff27cdc4331c73aab9ebf192986b55525ff6da1",
+        "version" : "0.53.0"
       }
     },
     {

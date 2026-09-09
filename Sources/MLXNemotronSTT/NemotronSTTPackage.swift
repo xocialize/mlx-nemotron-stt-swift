@@ -24,8 +24,12 @@ public enum NemotronSTTError: Error, Equatable {
 /// the detected language — playback/UI stays with the consumer.
 ///
 /// The model's internal cache-aware chunked streaming is package-internal memory discipline
-/// (per-chunk `RunProgress` reports + cancellation checkpoints); it is NOT a request surface. Live
-/// partial hypotheses are the deferred companion-N2 token-streaming contract.
+/// (per-chunk `RunProgress` reports + cancellation checkpoints); it is NOT a request surface.
+/// Audio that is still ARRIVING is a session, and since contract 1.39.0 it has a canonical
+/// surface: `LiveTranscribing` / `STTSession` via `MLXServeEngine.transcribeLive` (see
+/// `NemotronSTTSession.swift`). The package-specific `startLiveTranscription(_:Options)` that
+/// predates it is unchanged and still supported — Dictate (AB-T-0104) and voice-chat-kit drive
+/// it directly.
 @InferenceActor
 public final class NemotronSTTPackage: ModelPackage {
     public typealias Configuration = NemotronSTTConfiguration
@@ -60,7 +64,12 @@ public final class NemotronSTTPackage: ModelPackage {
                     name: "nemotron-3.5-asr",
                     summary:
                         "NVIDIA Nemotron 3.5 ASR — cache-aware streaming multilingual "
-                        + "speech-to-text (40 locales, native punctuation/capitalization).")
+                        + "speech-to-text (40 locales, native punctuation/capitalization).",
+                    // Live transcription, declared (contract 1.39.0). `.cumulative`: each chunk
+                    // carries the whole transcript so far, so a consumer REPLACES. Non-nil here
+                    // requires the `LiveTranscribing` conformance in NemotronSTTSession.swift —
+                    // LIV-1 checks both directions.
+                    controls: STTControls(liveDiscipline: .cumulative))
             ]
         )
     }
@@ -170,15 +179,23 @@ extension NemotronSTTPackage {
         .of(NemotronSTTPackage.self)
     }
 
-    /// Open a live transcription session on the prepared model — the package-specific surface
-    /// for audio that is still arriving. The engine's `stt` contract stays one-shot; file and
-    /// utterance transcription still go through `engine.run(STTRequest)`.
+    /// Open a live transcription session on the prepared model — the **package-specific**
+    /// surface, predating the canonical one and kept for the consumers built on it (Dictate,
+    /// AB-T-0104; voice-chat-kit). New code should prefer
+    /// `MLXServeEngine.transcribeLive(_:package:)`, which admits the session, holds residency
+    /// for it, and hands back the provider-agnostic `STTLiveHandle`.
     ///
     /// Reach it by downcasting the instance the engine hands back:
     /// ```swift
     /// guard let package = try await engine.prepare(.stt) as? NemotronSTTPackage else { ... }
-    /// let live = try await package.startLiveTranscription(.init(attContextSize: [56, 3]))
+    /// let live = try await package.startLiveTranscription(
+    ///     NemotronLiveTranscription.Options(attContextSize: [56, 3]))
     /// ```
+    ///
+    /// **Name the type at the call site.** Since 1.39.0 this overloads the protocol's
+    /// `startLiveTranscription(_ request: STTSessionRequest)`, so the `.init(language:)`
+    /// shorthand — which both types accept — is ambiguous. Passing a typed `Options` value (as
+    /// voice-chat-kit already does) is unaffected; a zero-argument call is too.
     ///
     /// - Throws: `PackageError.notLoaded` before the engine has prepared the package, and
     ///   `NemotronSTTError.sessionActive` while another session is still open.

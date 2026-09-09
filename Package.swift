@@ -17,10 +17,11 @@ let package = Package(
         .executable(name: "nemotron-stt-gate", targets: ["nemotron-stt-gate"]),
     ],
     dependencies: [
-        // MLXEngine contract + runtime. Floor 0.32.0 = contract 1.24.0, where the engine
-        // downloads a WeightSourcing config's missing sources itself (this package has no
-        // materializer of its own).
-        .package(url: "https://github.com/xocialize/mlx-engine-swift", from: "0.32.0"),
+        // MLXEngine contract + runtime. Floor 0.53.0 = contract 1.39.0, the live-STT plane
+        // (`LiveTranscribing` / `STTSession` / `STTControls.liveDiscipline`) this package now
+        // conforms to — see NemotronSTTSession.swift.
+        // (Previous floor 0.32.0 = contract 1.24.0, engine-executed materialization.)
+        .package(url: "https://github.com/xocialize/mlx-engine-swift", from: "0.53.0"),
         // The Nemotron ASR core (v0.2.0 = the live streaming session this package exposes).
         .package(url: "https://github.com/xocialize/nemotron-asr-mlx-swift.git", from: "0.2.0"),
     ],
@@ -37,6 +38,7 @@ let package = Package(
             dependencies: [
                 "MLXNemotronSTT",
                 .product(name: "MLXServeCore", package: "mlx-engine-swift"),
+                .product(name: "MLXServeConformance", package: "mlx-engine-swift"),
                 .product(name: "MLXEngineTestKit", package: "mlx-engine-swift"),
             ]
         ),
@@ -44,6 +46,7 @@ let package = Package(
             name: "MLXNemotronSTTTests",
             dependencies: [
                 "MLXNemotronSTT",
+                .product(name: "NemotronASR", package: "nemotron-asr-mlx-swift"),
                 .product(name: "MLXServeCore", package: "mlx-engine-swift"),
                 .product(name: "MLXServeConformance", package: "mlx-engine-swift"),
             ]
