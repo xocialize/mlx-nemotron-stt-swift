@@ -2,7 +2,8 @@
 
 ![platform](https://img.shields.io/badge/platform-macOS%2026%2B%20%C2%B7%20Apple%20Silicon-black)
 ![swift](https://img.shields.io/badge/Swift-6.2-orange)
-![engine](https://img.shields.io/badge/MLXEngine-%E2%89%A5%20v0.32.0-purple)
+![engine](https://img.shields.io/badge/MLXEngine-%E2%89%A5%20v0.53.0-purple)
+![live](https://img.shields.io/badge/live-LiveTranscribing-blueviolet)
 ![capability](https://img.shields.io/badge/capability-stt-lightgrey)
 ![port code](https://img.shields.io/badge/port%20code-MIT-blue)
 ![weights](https://img.shields.io/badge/weights-OpenMDW--1.1-green)
@@ -15,7 +16,9 @@ capitalization, on-device on Apple Silicon.
 - **Model:** [`nvidia/nemotron-3.5-asr-streaming-0.6b`](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b) — 600M cache-aware FastConformer-RNNT with language-ID prompt conditioning.
 - **Core:** [`xocialize/nemotron-asr-mlx-swift`](https://github.com/xocialize/nemotron-asr-mlx-swift) (`NemotronASR`) — the MLX-Swift port, parity-locked bit-for-bit against the Python `Blaizzy/mlx-audio` reference.
 - **Weights:** [`mlx-community/nemotron-3.5-asr-streaming-0.6b`](https://huggingface.co/mlx-community/nemotron-3.5-asr-streaming-0.6b) (bf16, ~1.2 GB) and `-8bit`, downloaded by the engine on first run (19.4 s cold, measured).
-- **Capability:** `stt` (contract 1.20.0, engine ≥ v0.32.0). Canonical output: text.
+- **Capability:** `stt` (contract 1.20.0, extended by 1.38.0 and 1.39.0; engine ≥ v0.53.0).
+  Canonical output: text. Also conforms to **`LiveTranscribing`** — the canonical live-STT
+  plane — declaring `STTControls(liveDiscipline: .cumulative)`.
 - **License:** weights **OpenMDW-1.1** (permissive); port code **MIT**.
 
 ## Install
@@ -23,7 +26,7 @@ capitalization, on-device on Apple Silicon.
 Add the package to your `Package.swift`:
 
 ```swift
-.package(url: "https://github.com/xocialize/mlx-nemotron-stt-swift.git", from: "0.3.0"),
+.package(url: "https://github.com/xocialize/mlx-nemotron-stt-swift.git", from: "0.4.0"),
 ```
 
 and the product to your target:
@@ -32,10 +35,27 @@ and the product to your target:
 .product(name: "MLXNemotronSTT", package: "mlx-nemotron-stt-swift"),
 ```
 
-Requires [`mlx-engine-swift`](https://github.com/xocialize/mlx-engine-swift) **≥ v0.32.0** —
-`stt` landed in v0.29.0, but this package carries no downloader of its own and relies on the
-engine-executed materialization added in contract 1.24.0 / v0.32.0. The engine + core (`NemotronASR`) resolve transitively. In an Xcode app,
-add the package and link the **MLXNemotronSTT** product to your app target.
+Requires [`mlx-engine-swift`](https://github.com/xocialize/mlx-engine-swift) **≥ v0.53.0**.
+`stt` landed in v0.29.0; this package carries no downloader of its own and relies on the
+engine-executed materialization added in 1.24.0 / v0.32.0, and since v0.4.0 it conforms to the
+`LiveTranscribing` plane introduced in contract **1.39.0 / v0.53.0**. The engine + core
+(`NemotronASR`) resolve transitively. In an Xcode app, add the package and link the
+**MLXNemotronSTT** product to your app target.
+
+### Live transcription
+
+Two surfaces, both supported:
+
+- **`engine.transcribeLive(_:package:)`** — the canonical plane (contract 1.39.0). Push audio at
+  the session's declared `expectedSampleRate` (16 kHz); it answers `.accepted` / `.backoff` /
+  `.ended` / `.unsupportedSampleRate` rather than silently dropping. Chunks carry a
+  `committedThrough` watermark, and the declared discipline is `.cumulative` — **replace what you
+  hold**, which is a delivery rule, not a claim that anything may be revised: this decoder only
+  ever appends.
+- **`startLiveTranscription(_:Options:)`** — the original package-specific session, unchanged and
+  still supported for existing consumers (ML[X] Audio Studio's Dictate, `voice-chat-kit`). Its
+  input continuation stays unbounded, so those callers see exactly today's behaviour; the bounded
+  buffer lives in the canonical adapter.
 
 ## Usage (through MLXEngine)
 
